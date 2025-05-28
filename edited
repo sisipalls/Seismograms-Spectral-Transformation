@@ -1,0 +1,133 @@
+# Notebook Setup 
+%pip install PyWavelets numpy matplotlib scipy obspy usgs-libcomcat datetime seaborn 
+
+# Import necessary dependencies 
+import pywt 
+import numpy as np 
+import matplotlib.pyplot as plt 
+from obspy import UTCDateTime 
+from obspy.clients.fdsn import Client 
+from scipy.fftpack import fft, fftfreq, next_fast_len
+from scipy.signal import stft 
+
+# Define network-station code 
+network = "IU"
+station = "KONO"
+location = "00"
+channel = "BHZ" # High-gain broadband vertical component 
+
+# Define time window 
+starttime = UTCDateTime("2023-02-06T01:15:00")
+endtime = starttime + 60 * 30 # 30 minutes 
+
+client = Client("IRIS")
+
+# Call the specific data from IRIS 
+st = client.get_waveforms(network=network, station=station, location=location, channel=channel, starttime=starttime, endtime=endtime, attach_response=True)
+
+# Basic pre-processing: 
+# Merge all data if there are gaps; detrend, taper 
+# Remove the seismic instrument response; convert from the digitizer units to ground motion (velocity) units 
+st.merge()
+st.detrend(type='linear')
+st.taper(max_percentage=0.05)
+st.remove_response(output="VEL")
+
+# Define trimmed window 
+trim_start = starttime + 2 * 60 
+trim_end = endtime - 5 * 60 
+st.trim(starttime=trim_start, endtime=trim_end)
+
+# Plot the waveform 
+st.plot(); 
+
+# Save the seismogram for later use; 'MSEED' format 
+st.write("earthquakes.mseed", format="MSEED")
+
+%pip install pyrocko 
+!snuffler earthquakes.mseed 
+
+# Filter the seismogram 
+st2 = st.copy()
+st2.filter("bandpass", freqmin=1.0, freqmax=25.0, corners=4, zerophase=True)
+st2.plot();
+
+# Get the number of samples in the Trace
+npts = st[0].stats.npts  # Total number of data points (samples) in the waveform
+
+# Find the optimal FFT length
+Nfft = next_fast_len(int(st[0].data.shape[0]))
+
+# Create a frequency vector (in Hz) up to Nyquist frequency
+freqVec = fftfreq(Nfft, d=st[0].stats.delta)[:Nfft//2] # '[:Nfft//2]' keeps only the positive frequencies
+
+# Compute the FFT of the seismic signal with zero-padding to length Nfft
+st_fft = fft(st[0].data, n=Nfft) # It automatically zero-pads data
+
+fig, ax = plt.subplots(2, 1, figsize=(11, 8))
+ax[0].plot(freqVec, np.abs(st_fft[:Nfft//2])/Nfft)
+ax[0].grid(True)
+ax[0].set_xscale('log');ax[0].set_yscale('log')
+ax[0].set_xlabel('Frequency (Hz)');ax[0].set_ylabel('Amplitude (m/s)')
+ax[1].hist(np.log10(np.abs(st_fft[:Nfft//2])/Nfft),100)
+ax[1].set_xlabel('Amplitude (m/s) (log10)')
+plt.tight_layout()
+
+# Plot the spectrogram
+st.spectrogram(log=True)
+
+# Define parameters 
+nperseg = 1000
+noverlap = 200 
+
+# Extract data and time axis 
+tr = st[0]
+data = tr.data 
+sampling_rate = tr.stats.sampling_rate
+dt = 1 / sampling_rate
+num_samples = len(data)
+time = np.arange(0, num_samples * dt, dt)
+
+# Perform STFT
+f_stft, t_stft, Zxx = stft(data, fs=sampling_rate, nperseg=nperseg, noverlap=200)
+Zxx_mag = np.log10(np.abs(Zxx) + 1e-10)  # Avoid log(0)
+
+# Perform CWT
+wavelet_name = 'cmor1.0-0.5'
+central_frequency = pywt.central_frequency(wavelet_name)
+min_freq = 0.1
+max_freq = sampling_rate / 2
+num_scales = 256
+frequencies_cwt = np.logspace(np.log10(min_freq), np.log10(max_freq), num_scales)
+scales = central_frequency * sampling_rate / frequencies_cwt
+coefficients, _ = pywt.cwt(data, scales=scales, wavelet=wavelet_name)
+cwt_mag = np.log10(np.abs(coefficients) + 1e-10)
+
+# Shared color scale
+vmin = min(Zxx_mag.min(), cwt_mag.min())
+vmax = max(Zxx_mag.max(), cwt_mag.max())
+
+
+fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True, constrained_layout=True)
+
+# STFT
+im1 = axes[0].pcolormesh(t_stft, f_stft, Zxx_mag, vmin=vmin, vmax=vmax, shading='gouraud', cmap='jet')
+axes[0].set_yscale('log')
+axes[0].set_ylim(0.1, 40)
+axes[0].set_ylabel("Frequency (Hz)")
+axes[0].set_title("STFT Spectrogram")
+
+# CWT
+extent = [time[0], time[-1], frequencies_cwt[-1], frequencies_cwt[0]]
+im2 = axes[1].imshow(cwt_mag, aspect='auto', extent=extent,
+                     cmap='jet', vmin=vmin, vmax=vmax)
+axes[1].set_yscale('log')
+axes[1].set_ylim(0.1, 40)
+axes[1].set_ylabel("Frequency (Hz)")
+axes[1].set_xlabel("Time (s)")
+axes[1].set_title("CWT Spectrogram")
+
+# Colorbar (shared)
+fig.colorbar(im2, ax=axes, orientation='vertical', label='Log Magnitude')
+
+plt.show()
