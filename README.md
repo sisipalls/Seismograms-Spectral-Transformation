@@ -3,7 +3,7 @@ This project analyses the 2023 Syria–Turkey Earthquake by downloading the seis
 On 6th February 2023, the earthquake struck southern and central Turkey and northern and western Syria with a magnitude (Mw) of 7.8 and with a depth of 17.9km. The epicentre was located 37km west-southwest of Gazientep, a major city in south-central Turkey. The impact of the earthquake could be felt in four countries: Turkey, Syria, Lebanon and Israel. 
 
 ### Seismic Data Source 
-#### The seismic waveform data is downloaded from IRIS using the following parameters: 
+The seismic waveform data is downloaded from IRIS using the following parameters: 
   Network: IU 
   Station: KONO
   Location: 00 
